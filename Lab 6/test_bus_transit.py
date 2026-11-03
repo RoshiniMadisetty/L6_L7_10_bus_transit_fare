@@ -98,3 +98,93 @@ def test_turnstiles_jam():
 
 def test_turnstiles_operational():
     assert inspect_smartcard_turnstiles([[1, 2, 3]]) == "OPERATIONAL"
+
+
+
+# ---------- Extra tests for branch coverage ----------
+
+def test_empty_manifest_list():
+    # outer for-loop never entered
+    assert process_commute_manifest([], 1.0) == {"total_fare": 0.0, "status": "ZERO_RIDERSHIP"}
+
+
+def test_missing_route_active_defaults_to_inactive():
+    result = process_commute_manifest([{"commuters": [c(1)]}], 1.0)
+    assert result["status"] == "ZERO_RIDERSHIP"
+
+
+def test_active_route_with_no_commuters_key():
+    # route_type defaults to local, commuters defaults to [] (inner loop never entered)
+    result = process_commute_manifest([{"route_active": True}], 1.0)
+    assert result["status"] == "ZERO_RIDERSHIP"
+
+
+def test_empty_commuter_dict_uses_defaults():
+    # zones=1, type=regular, blacklisted=False -> 2.5 + 1 = 3.5
+    result = process_commute_manifest([{"route_active": True, "commuters": [{}]}], 1.0)
+    assert result["total_fare"] == pytest.approx(3.5)
+    assert result["status"] == "COMPLETED"
+
+
+def test_negative_zones_rejected():
+    result = process_commute_manifest([m("local", [c(-2)])], 1.0)
+    assert result["status"] == "ZERO_RIDERSHIP"
+
+
+def test_exactly_four_rejections_is_not_audit():
+    commuters = [c(0)] * 4 + [c(1)]
+    result = process_commute_manifest([m("local", commuters)], 1.0)
+    assert result["status"] == "COMPLETED"
+    assert result["total_fare"] == pytest.approx(3.5)
+
+
+def test_zero_booking_fee_is_valid():
+    result = process_commute_manifest([m("local", [c(1)], priority=True)], 0)
+    assert result["total_fare"] == pytest.approx(3.5)
+
+
+def test_express_blacklisted_with_priority_pays_only_fee():
+    # break resets fare to 0, then priority fee 1.5 is still added
+    result = process_commute_manifest([m("express", [c(1, blacklisted=True)], priority=True)], 1.5)
+    assert result["total_fare"] == pytest.approx(1.5)
+    assert result["status"] == "COMPLETED"
+
+
+def test_senior_on_express_and_student_on_local():
+    # senior express: (6 + 0.5) * 0.7 = 4.55 ; student local: (2.5 + 0.5) * 0.5 = 1.5
+    manifests = [m("express", [c(1, "senior")]), m("local", [c(1, "student")])]
+    result = process_commute_manifest(manifests, 1.0)
+    assert result["total_fare"] == pytest.approx(6.05)
+
+
+def test_regular_shuttle_and_multiple_manifests():
+    # shuttle regular zones 3: 4 + 3 = 7 ; inactive manifest ignored
+    manifests = [m("shuttle", [c(3)]), m("express", [c(1)], active=False)]
+    result = process_commute_manifest(manifests, 1.0)
+    assert result["total_fare"] == pytest.approx(7.0)
+
+
+# ---- turnstiles ----
+
+def test_turnstile_streak_resets_after_good_reading():
+    assert inspect_smartcard_turnstiles([[4, 1, 4]]) == "OPERATIONAL"
+
+
+def test_turnstile_exactly_three_failures_is_not_a_failure():
+    assert inspect_smartcard_turnstiles([[3, 3, 3]]) == "OPERATIONAL"
+
+
+def test_turnstile_device_with_no_readings():
+    assert inspect_smartcard_turnstiles([[]]) == "OPERATIONAL"
+
+
+def test_turnstile_jam_on_second_device():
+    assert inspect_smartcard_turnstiles([[1], [4, 4]]) == "TURNSTILE_JAM"
+
+
+def test_turnstile_streak_does_not_carry_across_devices():
+    assert inspect_smartcard_turnstiles([[4], [4]]) == "OPERATIONAL"
+
+
+def test_turnstile_single_failure():
+    assert inspect_smartcard_turnstiles([[5]]) == "OPERATIONAL"
